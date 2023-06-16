@@ -27,7 +27,7 @@ class _LoginpageState extends State<Loginpage> {
       var url = Uri.parse("${AppEndpoint.endPointDomain}/login-web.php");
       var response = await http.post(url,
           body: {'username': username.text, 'password': password.text});
-
+      print(response.body);
       if (response.statusCode == 200) {
         List data = jsonDecode(response.body)['data'];
 

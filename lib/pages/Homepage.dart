@@ -1,8 +1,10 @@
 import 'dart:async';
 import 'dart:convert';
-
+import 'package:calendar_date_picker2/calendar_date_picker2.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:get_storage/get_storage.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
 import 'package:queueing_system_web/Models/MonthsModel.dart';
 import 'package:queueing_system_web/Services/StringExtensions.dart';
@@ -49,9 +51,12 @@ class _HomepageState extends State<Homepage> {
   }
 
   List<QueueModel> queueList = [];
+  List<QueueModel> queueList_history = [];
   List<UsertypeModel> cashierList = [];
   List<UsertypeModel> registrarList = [];
   List<UsertypeModel> customerList = [];
+
+  List<DateTime?> list_Dates = [];
 
   List<String> year = [
     '2015',
@@ -94,21 +99,31 @@ class _HomepageState extends State<Homepage> {
 
   Timer? _debounce;
 
+  String dateRange = '';
+
   getDataForAnalytics() async {
     double noshow_count = 0;
     double arrived_count = 0;
     double pending_count = 0;
-
-    for (var i = 0; i < queueList.length; i++) {
-      if (queueList[i].dateCreated.year == int.parse(selectedYear) &&
-          queueList[i].dateCreated.month == selectedMonthNumber) {
-        if (queueList[i].status == 'Done') {
-          arrived_count = arrived_count + 1;
-        } else if (queueList[i].status == 'Pending') {
-          pending_count = pending_count + 1;
-        } else {
-          noshow_count = noshow_count + 1;
-        }
+    print("dateslist: $list_Dates");
+    dateRange = DateFormat.yMMMMd().format(list_Dates[0]!) +
+        " - " +
+        DateFormat.yMMMMd().format(list_Dates[1]!);
+    var url =
+        Uri.parse("${AppEndpoint.endPointDomain}/get-history-range-date.php");
+    var response = await http.post(url, body: {
+      "start_date": list_Dates[0].toString(),
+      "end_date": list_Dates[1].toString()
+    });
+    var result_data = jsonDecode(response.body)['data'];
+    for (var i = 0; i < result_data.length; i++) {
+      print(result_data[i]);
+      if (result_data[i]['status'] == 'Done') {
+        arrived_count = arrived_count + 1;
+      } else if (result_data[i]['status'] == 'Pending') {
+        pending_count = pending_count + 1;
+      } else {
+        noshow_count = noshow_count + 1;
       }
     }
 
@@ -137,7 +152,33 @@ class _HomepageState extends State<Homepage> {
           setState(() {
             queueList = queuedata;
           });
-          getDataForAnalytics();
+        }
+      } else {}
+      setState(() {
+        isLoading = false;
+      });
+    } on Exception catch (e) {
+      print(e);
+    }
+  }
+
+  getQueues_history() async {
+    try {
+      var url =
+          Uri.parse("${AppEndpoint.endPointDomain}/get-queues-history.php");
+      var response = await http.post(
+        url,
+      );
+
+      if (response.statusCode == 200) {
+        List data = jsonDecode(response.body)['data'];
+
+        if (data.length == 0 || data.isEmpty) {
+        } else {
+          var queuedata = await queueModelFromJson(jsonEncode(data));
+          setState(() {
+            queueList_history = queuedata;
+          });
         }
       } else {}
       setState(() {
@@ -368,13 +409,20 @@ class _HomepageState extends State<Homepage> {
 
   update_account({required String id}) async {
     try {
+      var urlUploadImage =
+          Uri.parse("${AppEndpoint.imageEndpointUploadImage}/image-upload.php");
+      await http.post(urlUploadImage, body: {
+        "image": base64String,
+        "name": imagename,
+      });
       var url = Uri.parse("${AppEndpoint.endPointDomain}/update-account.php");
       var response = await http.post(url, body: {
         "id": id,
         "username": edit_username.text,
         "password": edit_password.text,
+        "image": imagename
       });
-
+      print(response.statusCode);
       if (response.statusCode == 200) {
         getCashier();
         getRegistrar();
@@ -518,74 +566,160 @@ class _HomepageState extends State<Homepage> {
     );
   }
 
+  String path = '';
+  String imagename = '';
+  String base64String = '';
+
   showDialogEditUser(
       {required String usertype, required UsertypeModel userData}) {
     showDialog(
       context: context,
-      builder: (context) {
+      builder: (BuildContext context) {
+        path = '';
+        imagename = '';
+        base64String = '';
         edit_username.text = userData.username;
         edit_password.text = userData.password;
         edit_confirmpassword.text = userData.password;
         return AlertDialog(
           title: Text("Edit ${usertype.capitalize()} Account"),
+          content: StatefulBuilder(
+              builder: (BuildContext context, StateSetter setState) {
+            return Container(
+              height: Sizer.getHeight(height: 50, context: context),
+              width: Sizer.getWidth(width: 50, context: context),
+              child: Column(
+                children: [
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      imagename,
+                      style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize:
+                              MediaQuery.of(context).textScaleFactor * 15),
+                    ),
+                  ),
+                  SizedBox(
+                    height: Sizer.getHeight(height: 1.5, context: context),
+                  ),
+                  InkWell(
+                    onTap: () async {
+                      // setState(pickImage());
+                      final ImagePicker picker = ImagePicker();
+                      final XFile? image =
+                          await picker.pickImage(source: ImageSource.gallery);
+                      if (image != null) {
+                        XFile imageFile = image;
+                        Uint8List uint8list = await imageFile.readAsBytes();
+                        setState(() => imagename = imageFile.name);
+                        base64String = base64Encode(uint8list);
+                      }
+                    },
+                    child: Container(
+                      alignment: Alignment.center,
+                      height: Sizer.getHeight(height: 7, context: context),
+                      decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(5),
+                          border: Border.all(color: Colors.grey)),
+                      child: Icon(
+                        Icons.file_upload_outlined,
+                        color: imagename == '' ? Colors.black : Colors.green,
+                      ),
+                    ),
+                  ),
+                  SizedBox(
+                    height: Sizer.getHeight(height: 3, context: context),
+                  ),
+                  TextFieldWidget(controller: edit_username, label: "Username"),
+                  SizedBox(
+                    height: Sizer.getHeight(height: 3, context: context),
+                  ),
+                  TextFieldWidget(
+                    controller: edit_password,
+                    label: "Password",
+                    isObscure: true,
+                  ),
+                  SizedBox(
+                    height: Sizer.getHeight(height: 3, context: context),
+                  ),
+                  TextFieldWidget(
+                    controller: edit_confirmpassword,
+                    label: "Confirm password",
+                    isObscure: true,
+                  ),
+                  SizedBox(
+                    height: Sizer.getHeight(height: 3, context: context),
+                  ),
+                  ButtonWidget(
+                      labelText: "UPDATE",
+                      onPressFunction: () {
+                        if (edit_username.text.isEmpty ||
+                            edit_password.text.isEmpty ||
+                            imagename == '' ||
+                            edit_confirmpassword.text.isEmpty) {
+                          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                            content: Text('Missing fields'),
+                            backgroundColor: Colors.red,
+                          ));
+                        } else if (edit_password.text.isEmpty !=
+                            edit_confirmpassword.text.isEmpty) {
+                          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                            content: Text('Password not match.'),
+                            backgroundColor: Colors.red,
+                          ));
+                        } else {
+                          Navigator.pop(context);
+                          update_account(
+                            id: userData.id.toString(),
+                          );
+                        }
+                      })
+                ],
+              ),
+            );
+          }),
+        );
+      },
+    );
+  }
+
+  showDatePicker() {
+    showDialog(
+      context: context,
+      builder: (context) {
+        list_Dates.clear();
+        return AlertDialog(
+          title: Text("Pick Date"),
           content: Container(
             height: Sizer.getHeight(height: 35, context: context),
             width: Sizer.getWidth(width: 50, context: context),
             child: Column(
               children: [
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: Text(
-                    "Edit Credential",
-                    style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: MediaQuery.of(context).textScaleFactor * 15),
+                Expanded(
+                  child: CalendarDatePicker2(
+                    config: CalendarDatePicker2Config(
+                      calendarType: CalendarDatePicker2Type.range,
+                    ),
+                    value: [],
+                    onValueChanged: (dates) {
+                      if (dates.length == 2) {
+                        list_Dates = dates;
+                      } else {
+                        list_Dates.clear();
+                      }
+                    },
                   ),
-                ),
-                SizedBox(
-                  height: Sizer.getHeight(height: 1.5, context: context),
-                ),
-                TextFieldWidget(controller: edit_username, label: "Username"),
-                SizedBox(
-                  height: Sizer.getHeight(height: 3, context: context),
-                ),
-                TextFieldWidget(
-                  controller: edit_password,
-                  label: "Password",
-                  isObscure: true,
-                ),
-                SizedBox(
-                  height: Sizer.getHeight(height: 3, context: context),
-                ),
-                TextFieldWidget(
-                  controller: edit_confirmpassword,
-                  label: "Confirm password",
-                  isObscure: true,
                 ),
                 SizedBox(
                   height: Sizer.getHeight(height: 3, context: context),
                 ),
                 ButtonWidget(
-                    labelText: "UPDATE",
-                    onPressFunction: () {
-                      if (edit_username.text.isEmpty ||
-                          edit_password.text.isEmpty ||
-                          edit_confirmpassword.text.isEmpty) {
-                        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                          content: Text('Missing fields'),
-                          backgroundColor: Colors.red,
-                        ));
-                      } else if (edit_password.text.isEmpty !=
-                          edit_confirmpassword.text.isEmpty) {
-                        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                          content: Text('Password not match.'),
-                          backgroundColor: Colors.red,
-                        ));
-                      } else {
+                    labelText: "SELECT",
+                    onPressFunction: () async {
+                      if (list_Dates.isNotEmpty) {
                         Navigator.pop(context);
-                        update_account(
-                          id: userData.id.toString(),
-                        );
+                        getDataForAnalytics();
                       }
                     })
               ],
@@ -603,6 +737,7 @@ class _HomepageState extends State<Homepage> {
     getCashier();
     getRegistrar();
     getCustomer();
+    getQueues_history();
   }
 
   @override
@@ -709,6 +844,22 @@ class _HomepageState extends State<Homepage> {
                                 labelText: "Analytics",
                                 onPressFunction: () {
                                   onClick(selectedindex: 4);
+                                }),
+                          ),
+                          SizedBox(
+                            height:
+                                Sizer.getHeight(height: 2, context: context),
+                          ),
+                          Container(
+                            padding: EdgeInsets.only(
+                                left:
+                                    Sizer.getWidth(width: 1, context: context),
+                                right:
+                                    Sizer.getWidth(width: 1, context: context)),
+                            child: ButtonWidget(
+                                labelText: "History",
+                                onPressFunction: () {
+                                  onClick(selectedindex: 5);
                                 }),
                           ),
                         ],
@@ -907,7 +1058,7 @@ class _HomepageState extends State<Homepage> {
                                                           image: DecorationImage(
                                                               fit: BoxFit.cover,
                                                               image: NetworkImage(
-                                                                  "http://190.160.15.118/queuing/images/${queueList[index].image}"))),
+                                                                  "https://kyusystem.000webhostapp.com/queuing/images/${queueList[index].image}"))),
                                                     ),
                                                     SizedBox(
                                                       width: Sizer.getWidth(
@@ -1128,7 +1279,7 @@ class _HomepageState extends State<Homepage> {
                                                                           fit: BoxFit
                                                                               .cover,
                                                                           image:
-                                                                              NetworkImage("http://190.160.15.118/queuing/images/${cashierList[index].image}"))),
+                                                                              NetworkImage("https://kyusystem.000webhostapp.com/queuing/images/${cashierList[index].image}"))),
                                                             ),
                                                             SizedBox(
                                                               width: Sizer
@@ -1387,7 +1538,7 @@ class _HomepageState extends State<Homepage> {
                                                                           ),
                                                                           image: DecorationImage(
                                                                               fit: BoxFit.cover,
-                                                                              image: NetworkImage("http://190.160.15.118/queuing/images/${registrarList[index].image}"))),
+                                                                              image: NetworkImage("https://kyusystem.000webhostapp.com/queuing/images/${registrarList[index].image}"))),
                                                                 ),
                                                                 SizedBox(
                                                                   width: Sizer.getWidth(
@@ -1628,7 +1779,7 @@ class _HomepageState extends State<Homepage> {
                                                                             color:
                                                                                 Colors.black,
                                                                           ),
-                                                                          image: DecorationImage(fit: BoxFit.cover, image: NetworkImage("http://190.160.15.118/queuing/images/${customerList[index].image}"))),
+                                                                          image: DecorationImage(fit: BoxFit.cover, image: NetworkImage("https://kyusystem.000webhostapp.com/queuing/images/${customerList[index].image}"))),
                                                                     ),
                                                                     SizedBox(
                                                                       width: Sizer.getWidth(
@@ -1717,136 +1868,305 @@ class _HomepageState extends State<Homepage> {
                                         ],
                                       ),
                                     )
-                                  : Container(
-                                      child: Column(
-                                        children: [
-                                          SizedBox(
-                                            height: Sizer.getHeight(
-                                                height: 2, context: context),
-                                          ),
-                                          Container(
-                                            child: Row(
-                                              children: [
-                                                SizedBox(
-                                                  width: Sizer.getWidth(
-                                                      width: 4,
-                                                      context: context),
+                                  :
+                                  ////////////////////////////////////////////////////////////////////////////////////
+                                  ////                           ANALYTICS                                        ////
+                                  ////////////////////////////////////////////////////////////////////////////////////
+                                  index == 4
+                                      ? Container(
+                                          child: Column(
+                                            children: [
+                                              SizedBox(
+                                                height: Sizer.getHeight(
+                                                    height: 2,
+                                                    context: context),
+                                              ),
+                                              Container(
+                                                child: Row(
+                                                  mainAxisAlignment:
+                                                      MainAxisAlignment
+                                                          .spaceBetween,
+                                                  children: [
+                                                    Row(
+                                                      children: [
+                                                        SizedBox(
+                                                          width: Sizer.getWidth(
+                                                              width: 4,
+                                                              context: context),
+                                                        ),
+                                                        Container(
+                                                          width: Sizer.getWidth(
+                                                              width: 10,
+                                                              context: context),
+                                                          alignment: Alignment
+                                                              .centerRight,
+                                                          child: ButtonWidget(
+                                                              labelText:
+                                                                  "Pick Date",
+                                                              onPressFunction:
+                                                                  () {
+                                                                showDatePicker();
+                                                              }),
+                                                        ),
+                                                      ],
+                                                    ),
+                                                    Row(
+                                                      children: [
+                                                        Text(
+                                                          dateRange,
+                                                          style: TextStyle(
+                                                              fontWeight:
+                                                                  FontWeight
+                                                                      .w400,
+                                                              fontSize: 20),
+                                                        ),
+                                                        SizedBox(
+                                                          width: Sizer.getWidth(
+                                                              width: 4,
+                                                              context: context),
+                                                        ),
+                                                      ],
+                                                    )
+                                                  ],
                                                 ),
-                                                Container(
-                                                  decoration: BoxDecoration(
-                                                      color: Colors.grey[200],
-                                                      borderRadius:
-                                                          BorderRadius.circular(
-                                                              4)),
-                                                  padding:
-                                                      EdgeInsets.only(left: 10),
-                                                  height: 40,
-                                                  width: MediaQuery.of(context)
-                                                          .size
-                                                          .width *
-                                                      0.10,
-                                                  child: DropdownButton(
-                                                    underline: SizedBox(),
-                                                    isExpanded: true,
-                                                    value: selectedYear,
-                                                    onChanged: (newValue) {
-                                                      setState(() {
-                                                        selectedYear =
-                                                            newValue!;
-                                                        getDataForAnalytics();
-                                                      });
-                                                    },
-                                                    items: year.map((data) {
-                                                      return DropdownMenuItem(
-                                                        child: new Text(data),
-                                                        value: data,
-                                                      );
-                                                    }).toList(),
-                                                  ),
-                                                ),
-                                                SizedBox(
-                                                  width: Sizer.getWidth(
-                                                      width: 2,
-                                                      context: context),
-                                                ),
-                                                Container(
-                                                  decoration: BoxDecoration(
-                                                      color: Colors.grey[200],
-                                                      borderRadius:
-                                                          BorderRadius.circular(
-                                                              4)),
-                                                  padding:
-                                                      EdgeInsets.only(left: 10),
-                                                  height: 40,
-                                                  width: MediaQuery.of(context)
-                                                          .size
-                                                          .width *
-                                                      0.10,
-                                                  child: DropdownButton(
-                                                    underline: SizedBox(),
-                                                    isExpanded: true,
-                                                    value: selectedMonth,
-                                                    onChanged: (newValue) {
-                                                      setState(() {
-                                                        selectedMonth =
-                                                            newValue!;
-                                                        for (var i = 0;
-                                                            i < months.length;
-                                                            i++) {
-                                                          if (months[i]
-                                                                  .monthname ==
-                                                              selectedMonth) {
-                                                            selectedMonthNumber =
-                                                                months[i]
-                                                                    .number;
-                                                          }
-                                                        }
-                                                      });
-                                                      getDataForAnalytics();
-                                                    },
-                                                    items:
-                                                        months.map((location) {
-                                                      return DropdownMenuItem(
-                                                        child: new Text(
-                                                            location.monthname),
-                                                        value:
-                                                            location.monthname,
-                                                      );
-                                                    }).toList(),
-                                                  ),
-                                                ),
-                                              ],
-                                            ),
-                                          ),
-                                          SizedBox(
-                                            height: Sizer.getHeight(
-                                                height: 15, context: context),
-                                          ),
-                                          SfCartesianChart(
-                                            primaryXAxis: CategoryAxis(),
-                                            primaryYAxis: NumericAxis(
-                                                minimum: 0,
-                                                maximum: 100,
-                                                interval: 10),
-                                            tooltipBehavior: tooltip,
-                                            series: <
-                                                ChartSeries<ChartData, String>>[
-                                              BarSeries<ChartData, String>(
-                                                  dataSource: data,
-                                                  xValueMapper:
-                                                      (ChartData data, _) =>
-                                                          data.x,
-                                                  yValueMapper:
-                                                      (ChartData data, _) =>
-                                                          data.y,
-                                                  name: 'Count',
-                                                  color: Color.fromRGBO(
-                                                      8, 142, 255, 1))
+                                              ),
+                                              SizedBox(
+                                                height: Sizer.getHeight(
+                                                    height: 15,
+                                                    context: context),
+                                              ),
+                                              SfCartesianChart(
+                                                primaryXAxis: CategoryAxis(),
+                                                primaryYAxis: NumericAxis(
+                                                    minimum: 0,
+                                                    maximum: 100,
+                                                    interval: 10),
+                                                tooltipBehavior: tooltip,
+                                                series: <
+                                                    ChartSeries<ChartData,
+                                                        String>>[
+                                                  BarSeries<ChartData, String>(
+                                                      dataSource: data,
+                                                      xValueMapper:
+                                                          (ChartData data, _) =>
+                                                              data.x,
+                                                      yValueMapper:
+                                                          (ChartData data, _) =>
+                                                              data.y,
+                                                      name: 'Count',
+                                                      color: Color.fromRGBO(
+                                                          8, 142, 255, 1))
+                                                ],
+                                              ),
                                             ],
                                           ),
-                                        ],
-                                      ),
-                                    ),
+                                        )
+                                      :
+                                      ////////////////////////////////////////////////////////////////////////////////////
+                                      ////                           HISTORY                                          ////
+                                      ////////////////////////////////////////////////////////////////////////////////////
+                                      Container(
+                                          child: Column(
+                                            children: [
+                                              SizedBox(
+                                                height: Sizer.getHeight(
+                                                    height: 3,
+                                                    context: context),
+                                              ),
+                                              Container(
+                                                padding: EdgeInsets.only(
+                                                    left: Sizer.getWidth(
+                                                        width: 5,
+                                                        context: context),
+                                                    right: Sizer.getWidth(
+                                                        width: 5,
+                                                        context: context)),
+                                                child: Align(
+                                                  alignment:
+                                                      Alignment.centerLeft,
+                                                  child: Text(
+                                                    "History",
+                                                    style: TextStyle(
+                                                      fontWeight:
+                                                          FontWeight.bold,
+                                                      fontSize: 25,
+                                                    ),
+                                                  ),
+                                                ),
+                                              ),
+                                              SizedBox(
+                                                height: Sizer.getHeight(
+                                                    height: 1.5,
+                                                    context: context),
+                                              ),
+                                              Expanded(
+                                                child: Container(
+                                                  padding: EdgeInsets.only(
+                                                      left: Sizer.getWidth(
+                                                          width: 5,
+                                                          context: context),
+                                                      right: Sizer.getWidth(
+                                                          width: 5,
+                                                          context: context)),
+                                                  child: ListView.builder(
+                                                    itemCount: queueList_history
+                                                        .length,
+                                                    itemBuilder:
+                                                        (BuildContext context,
+                                                            int index) {
+                                                      return Padding(
+                                                        padding: EdgeInsets.only(
+                                                            bottom:
+                                                                Sizer.getHeight(
+                                                                    height: 1,
+                                                                    context:
+                                                                        context)),
+                                                        child: Container(
+                                                          padding: EdgeInsets.only(
+                                                              left: Sizer.getWidth(
+                                                                  width: .5,
+                                                                  context:
+                                                                      context),
+                                                              right: Sizer.getWidth(
+                                                                  width: .5,
+                                                                  context:
+                                                                      context)),
+                                                          height:
+                                                              Sizer.getHeight(
+                                                                  height: 10,
+                                                                  context:
+                                                                      context),
+                                                          width: Sizer.getWidth(
+                                                              width: 100,
+                                                              context: context),
+                                                          color: queueList_history[
+                                                                          index]
+                                                                      .queueType ==
+                                                                  "cashier"
+                                                              ? Colors
+                                                                  .lightBlue[50]
+                                                              : Colors
+                                                                  .purple[50],
+                                                          child: Column(
+                                                            crossAxisAlignment:
+                                                                CrossAxisAlignment
+                                                                    .start,
+                                                            children: [
+                                                              SizedBox(
+                                                                height: Sizer
+                                                                    .getHeight(
+                                                                        height:
+                                                                            1,
+                                                                        context:
+                                                                            context),
+                                                              ),
+                                                              Text(
+                                                                "#${queueList_history[index].id}",
+                                                                style:
+                                                                    TextStyle(
+                                                                  fontWeight:
+                                                                      FontWeight
+                                                                          .bold,
+                                                                  fontSize: 10,
+                                                                ),
+                                                              ),
+                                                              SizedBox(
+                                                                height: Sizer
+                                                                    .getHeight(
+                                                                        height:
+                                                                            .5,
+                                                                        context:
+                                                                            context),
+                                                              ),
+                                                              Container(
+                                                                child: Row(
+                                                                  children: [
+                                                                    Container(
+                                                                      height: Sizer.getHeight(
+                                                                          height:
+                                                                              6,
+                                                                          context:
+                                                                              context),
+                                                                      width: Sizer.getWidth(
+                                                                          width:
+                                                                              3,
+                                                                          context:
+                                                                              context),
+                                                                      decoration: BoxDecoration(
+                                                                          border: Border.all(
+                                                                            color:
+                                                                                Colors.black,
+                                                                          ),
+                                                                          image: DecorationImage(fit: BoxFit.cover, image: NetworkImage("https://kyusystem.000webhostapp.com/queuing/images/${queueList_history[index].image}"))),
+                                                                    ),
+                                                                    SizedBox(
+                                                                      width: Sizer.getWidth(
+                                                                          width:
+                                                                              0.5,
+                                                                          context:
+                                                                              context),
+                                                                    ),
+                                                                    Container(
+                                                                      width: Sizer.getWidth(
+                                                                          width:
+                                                                              60,
+                                                                          context:
+                                                                              context),
+                                                                      height: Sizer.getHeight(
+                                                                          height:
+                                                                              6,
+                                                                          context:
+                                                                              context),
+                                                                      child:
+                                                                          Column(
+                                                                        crossAxisAlignment:
+                                                                            CrossAxisAlignment.start,
+                                                                        children: [
+                                                                          Text(
+                                                                            queueList_history[index].firstname.capitalize() +
+                                                                                " " +
+                                                                                queueList_history[index].lastname,
+                                                                            style:
+                                                                                TextStyle(
+                                                                              fontWeight: FontWeight.bold,
+                                                                              fontSize: 10,
+                                                                            ),
+                                                                          ),
+                                                                          Text(
+                                                                            queueList_history[index].status,
+                                                                            style:
+                                                                                TextStyle(
+                                                                              fontWeight: FontWeight.bold,
+                                                                              fontSize: 10,
+                                                                            ),
+                                                                          ),
+                                                                          Text(
+                                                                            DateFormat.yMMMMd().format(queueList_history[index].dateCreated) +
+                                                                                " " +
+                                                                                DateFormat.jm().format(queueList_history[index].dateCreated),
+                                                                            style:
+                                                                                TextStyle(
+                                                                              fontWeight: FontWeight.bold,
+                                                                              fontSize: 10,
+                                                                            ),
+                                                                          )
+                                                                        ],
+                                                                      ),
+                                                                    )
+                                                                  ],
+                                                                ),
+                                                              )
+                                                            ],
+                                                          ),
+                                                        ),
+                                                      );
+                                                    },
+                                                  ),
+                                                ),
+                                              )
+                                            ],
+                                          ),
+                                        ),
                 ),
               ],
             )),
